@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.9",
     "jmespath>=1.0.1",
     "python-dotenv>=1.0.1",
+    "openai>=1.50",
 ]
 
 [dependency-groups]

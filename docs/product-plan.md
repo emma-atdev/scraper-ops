@@ -40,7 +40,7 @@ MVP의 운영 검증 대상은 catch.co.kr 하나로 제한한다. 단, 설정 s
 - 기본 검증: 결과 0건, 필수 필드 누락, 수집량 급감, 응답 구조 변경
 - 실패 보고서 생성
 - Slack 실패 알림
-- VM용 `systemd timer`
+- 반복 실행 스케줄러 (운영 환경에 따라 Mac `launchd` 또는 VM `systemd timer`)
 - 실행 환경 정책: `local`, `vm`, `ci`, `container`
 - VM allowlist: `SCRAPER_ALLOWED_SITES`
 - 중복 실행 방지 file lock
@@ -734,14 +734,30 @@ audit log 분리:
 
 ## 운영 모델
 
-MVP 운영은 단일 VM과 SQLite를 기본으로 한다.
+MVP 운영은 사이트의 IP 정책에 따라 두 가지 형태로 분리한다. SQLite와 1회 실행 CLI runner는 공통.
 
 - runner는 1회 실행 CLI다.
-- VM에서는 `systemd timer`가 runner를 반복 실행한다.
 - SQLite는 단일 runner와 낮은 쓰기 빈도에서 사용한다.
 - file lock으로 중복 실행을 방지한다.
-- VM은 repo 전체를 pull 받을 수 있지만 allowlist에 있는 사이트만 실행한다.
 - 차단 민감 사이트는 `preferred_environment: local` 또는 별도 worker로 분리한다.
+
+### 형태 A. 로컬 (Mac `launchd`)
+
+- 한국 IP를 요구하는 사이트(예: catch.co.kr)에 사용한다. 외국 IP의 클라우드 VM은 차단당하므로 사용자 노트북의 한국 ISP IP를 활용한다.
+- macOS의 `launchd`가 `StartCalendarInterval`로 정해진 시각마다 runner를 호출한다.
+- Mac이 켜져 있는 시간대(예: 평일 영업시간)에만 수집되며, 그 외 시간의 누락은 다음 run의 hash 기반 증분 적재가 자연스럽게 따라잡는다.
+- catch.yaml은 `preferred_environment: local`로 둔다.
+
+### 형태 B. VM (`systemd timer`)
+
+- 외국 IP가 무관한 사이트(글로벌 사이트, 공공 API), Slack approval server, LLM 호출 노드 등에 사용한다.
+- VM에서는 `systemd timer`가 runner를 반복 실행한다.
+- VM은 repo 전체를 pull 받을 수 있지만 allowlist(`SCRAPER_ALLOWED_SITES`)에 있는 사이트만 실행한다.
+- yaml은 `preferred_environment: vm`으로 둔다.
+
+### 어느 형태가 맞는지 판정
+
+신규 사이트 온보딩의 Step A2(수집 가능성 판정)에서 **외국 IP 차단 여부**를 함께 점검한다. 한국 IP만 받는 사이트면 형태 A로, 그 외엔 형태 B 또는 둘 다 가능. 한 사이트가 한 번에 두 형태로 동시에 운영되지는 않는다 (file lock과 DB 무결성 위해).
 
 `SCRAPER_ALLOWED_SITES`와 `preferred_environment`는 목적이 다르며 분리해서 관리한다.
 
@@ -761,8 +777,8 @@ MVP 성공 기준:
 - API schema 변경 또는 빈 결과를 검증 실패로 감지한다.
 - static HTML diagnostics가 차단/비정상 상태 판단에 포함된다.
 - 실패 보고서와 Slack 알림이 충분한 맥락을 제공한다.
-- VM에서 `systemd timer`로 안정적으로 실행된다.
-- allowlist 정책으로 VM에서 허용된 사이트만 실행된다.
+- 스케줄러(Mac `launchd` 또는 VM `systemd timer`)로 안정적으로 반복 실행된다.
+- VM 운영 시 allowlist 정책으로 허용된 사이트만 실행된다.
 
 확장 성공 기준:
 

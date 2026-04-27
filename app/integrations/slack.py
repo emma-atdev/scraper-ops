@@ -132,7 +132,81 @@ class SlackNotifier:
             )
 
         # fallback text (mobile notification, blocks 미지원 클라이언트)
-        text = f"{emoji} {site} {status} — i={stats.inserted} u={stats.updated} k={stats.unchanged}"
+        if status == "success" and (stats.inserted > 0 or stats.updated > 0):
+            text = f"{emoji} {site} +{stats.inserted} new / ~{stats.updated} changed (k={stats.unchanged})"
+        else:
+            text = f"{emoji} {site} {status} — i={stats.inserted} u={stats.updated} k={stats.unchanged}"
+        return text, blocks
+
+    # -------- daily summary --------
+
+    def notify_daily_summary(self, summary: dict[str, Any], *, hours: int = 24) -> dict[str, Any] | None:
+        """직전 N시간 운영 요약을 Slack에 게시."""
+        if not self.enabled:
+            logger.info(
+                "slack disabled (no token/channel), skip daily summary",
+                extra={"event": "slack_skipped", "mode": "daily_summary"},
+            )
+            return None
+
+        text, blocks = self._build_summary_message(summary, hours=hours)
+        return self._post(text=text, blocks=blocks, run_id="daily_summary", site="*")
+
+    @staticmethod
+    def _build_summary_message(
+        summary: dict[str, Any], *, hours: int
+    ) -> tuple[str, list[dict[str, Any]]]:
+        by_site: dict[str, dict] = summary.get("by_site", {}) or {}
+
+        if not by_site:
+            text = f":hourglass_flowing_sand: scraper-ops daily summary — last {hours}h: no runs"
+            blocks = [
+                {"type": "header", "text": {"type": "plain_text", "text": text[:150]}},
+            ]
+            return text, blocks
+
+        total_runs = sum(s["runs"] for s in by_site.values())
+        total_failed = sum(s["failed"] for s in by_site.values())
+        total_inserted = sum(s["inserted"] for s in by_site.values())
+        total_updated = sum(s["updated"] for s in by_site.values())
+
+        emoji = ":bar_chart:" if total_failed == 0 else ":warning:"
+        header = f"{emoji} scraper-ops daily summary — last {hours}h"
+
+        lines: list[str] = []
+        for site_name in sorted(by_site.keys()):
+            s = by_site[site_name]
+            mark = ":white_check_mark:" if s["failed"] == 0 else f":x: {s['failed']} failed"
+            lines.append(
+                f"*{site_name}*  {mark}  runs={s['runs']}  +{s['inserted']} new / ~{s['updated']} changed  "
+                f"(last: {s['last_status']} @ {s['last_finished_at']})"
+            )
+
+        blocks: list[dict[str, Any]] = [
+            {"type": "header", "text": {"type": "plain_text", "text": header[:150]}},
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "\n".join(lines)},
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"window: {summary.get('since')} → {summary.get('until')} · "
+                            f"total runs={total_runs}  failed={total_failed}  "
+                            f"+{total_inserted} new / ~{total_updated} changed"
+                        ),
+                    }
+                ],
+            },
+        ]
+
+        text = (
+            f"{emoji} daily summary {hours}h — runs={total_runs} failed={total_failed} "
+            f"+{total_inserted}/~{total_updated}"
+        )
         return text, blocks
 
     @staticmethod

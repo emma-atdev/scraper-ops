@@ -47,9 +47,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-dir", default="data", help="Root for snapshots/, reports/.")
     parser.add_argument(
         "--notify",
-        choices=["always", "failure", "never"],
-        default="failure",
-        help="When to send Slack notifications. Default: only on failure.",
+        choices=["always", "failure_or_change", "failure", "never"],
+        default="failure_or_change",
+        help=(
+            "When to send Slack notifications. "
+            "failure_or_change(default): on failure or when records changed. "
+            "failure: only on failure. always: every run. never: silent."
+        ),
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["collect", "daily_summary"],
+        default="collect",
+        help="collect(default): scheduled crawl. daily_summary: post 24h summary to Slack.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Do not execute collectors. Just print plan.")
     return parser
@@ -60,6 +70,9 @@ def main(argv: list[str] | None = None) -> int:
 
     load_dotenv()
     setup_logging()
+
+    if args.mode == "daily_summary":
+        return _run_daily_summary(args)
 
     environment = args.environment or current_environment()
     allowed_sites = parse_allowed_sites(os.environ.get("SCRAPER_ALLOWED_SITES"))
@@ -233,7 +246,7 @@ def _run_site(
             diagnosis=diagnosis,
             meta={"exception": f"{type(e).__name__}:{e}"},
         )
-        if _should_notify(notify_policy, last_status):
+        if _should_notify(notify_policy, last_status, total):
             slack.notify_run_result(
                 site=site,
                 run_id=site_run_id,
@@ -261,7 +274,7 @@ def _run_site(
         diagnosis=diagnosis,
         meta={"inserted": total.inserted, "updated": total.updated, "unchanged": total.unchanged},
     )
-    if _should_notify(notify_policy, last_status):
+    if _should_notify(notify_policy, last_status, total):
         slack.notify_run_result(
             site=site,
             run_id=site_run_id,
@@ -274,12 +287,40 @@ def _run_site(
     return total
 
 
-def _should_notify(policy: str, status: str) -> bool:
+def _run_daily_summary(args) -> int:
+    """직전 24시간 동안의 운영 요약을 Slack에 게시한다."""
+    conn = open_connection(args.db_path)
+    init_schema(conn)
+    repo = Repository(conn)
+    summary = repo.summarize_recent(hours=24)
+
+    slack = SlackNotifier(SlackConfig.from_env())
+    slack.notify_daily_summary(summary, hours=24)
+
+    by_site = summary.get("by_site") or {}
+    logger.info(
+        "daily summary posted",
+        extra={
+            "event": "daily_summary_posted",
+            "sites": list(by_site.keys()),
+            "total_runs": sum(s["runs"] for s in by_site.values()),
+            "total_failed": sum(s["failed"] for s in by_site.values()),
+        },
+    )
+    return 0
+
+
+def _should_notify(policy: str, status: str, stats: UpsertStats) -> bool:
     if policy == "never":
         return False
     if policy == "always":
         return True
-    return status != "success"  # "failure" 정책
+    if policy == "failure_or_change":
+        if status != "success":
+            return True
+        return stats.inserted > 0 or stats.updated > 0
+    # "failure" 정책
+    return status != "success"
 
 
 if __name__ == "__main__":

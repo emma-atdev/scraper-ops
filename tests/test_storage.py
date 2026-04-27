@@ -55,3 +55,25 @@ def test_pragma_wal_and_busy_timeout(tmp_path):
     busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
     assert journal_mode.lower() == "wal"
     assert busy_timeout == 5000
+
+
+def test_summarize_recent_aggregates_runs(tmp_path):
+    repo = _setup(tmp_path)
+    repo.start_run("catch", "run-1")
+    repo.upsert_postings(
+        "catch",
+        "run-1",
+        [JobPosting(external_id="1", site="catch", title="t", company="c", deadline="d")],
+    )
+    repo.finish_run("run-1", status="success", stats=__import__("app.models", fromlist=["UpsertStats"]).UpsertStats(inserted=1))
+
+    repo.start_run("catch", "run-2")
+    repo.finish_run("run-2", status="failed")
+
+    summary = repo.summarize_recent(hours=24)
+    assert "catch" in summary["by_site"]
+    s = summary["by_site"]["catch"]
+    assert s["runs"] == 2
+    assert s["failed"] == 1
+    assert s["success"] == 1
+    assert s["inserted"] == 1

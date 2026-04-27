@@ -3,7 +3,7 @@ name: catch.co.kr
 enabled: true
 
 runtime:
-  preferred_environment: vm
+  preferred_environment: local
   min_interval_minutes: 60
   request_delay_seconds: 1.0
   max_pages_per_run: 100

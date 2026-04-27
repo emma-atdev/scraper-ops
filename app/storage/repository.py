@@ -118,3 +118,66 @@ class Repository:
             (site,),
         ).fetchone()
         return int(row["c"]) if row else 0
+
+    def summarize_recent(self, hours: int = 24) -> dict:
+        """직전 N시간 동안의 run 통계를 site별로 집계.
+
+        반환 형식:
+        {
+            "since": iso8601,
+            "until": iso8601,
+            "by_site": {
+                "catch": {
+                    "runs": 9, "success": 9, "failed": 0,
+                    "inserted": 73, "updated": 4, "unchanged": 21000,
+                    "last_status": "success", "last_finished_at": "..."
+                }
+            }
+        }
+        """
+        from datetime import datetime, timedelta, timezone
+
+        until = datetime.now(timezone.utc)
+        since = until - timedelta(hours=hours)
+        since_iso = since.isoformat(timespec="seconds")
+        until_iso = until.isoformat(timespec="seconds")
+
+        rows = self.conn.execute(
+            """
+            SELECT site,
+                   COUNT(*) AS runs,
+                   SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
+                   SUM(CASE WHEN status='failed'  THEN 1 ELSE 0 END) AS failed,
+                   SUM(COALESCE(inserted, 0))  AS inserted,
+                   SUM(COALESCE(updated, 0))   AS updated,
+                   SUM(COALESCE(unchanged, 0)) AS unchanged
+            FROM runs
+            WHERE started_at >= ?
+            GROUP BY site
+            """,
+            (since_iso,),
+        ).fetchall()
+
+        by_site: dict[str, dict] = {}
+        for r in rows:
+            site = r["site"]
+            last = self.conn.execute(
+                """
+                SELECT status, finished_at FROM runs
+                WHERE site=? AND started_at >= ?
+                ORDER BY started_at DESC LIMIT 1
+                """,
+                (site, since_iso),
+            ).fetchone()
+            by_site[site] = {
+                "runs": int(r["runs"] or 0),
+                "success": int(r["success"] or 0),
+                "failed": int(r["failed"] or 0),
+                "inserted": int(r["inserted"] or 0),
+                "updated": int(r["updated"] or 0),
+                "unchanged": int(r["unchanged"] or 0),
+                "last_status": last["status"] if last else None,
+                "last_finished_at": last["finished_at"] if last else None,
+            }
+
+        return {"since": since_iso, "until": until_iso, "by_site": by_site}

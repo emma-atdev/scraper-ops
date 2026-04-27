@@ -38,6 +38,7 @@ data/runs/*
 data/snapshots/*
 data/reports/*
 data/audit.log
+data/*.log
 !data/locks/.gitkeep
 !data/runs/.gitkeep
 !data/snapshots/.gitkeep

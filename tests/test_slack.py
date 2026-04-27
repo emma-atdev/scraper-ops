@@ -56,6 +56,36 @@ def test_message_blocks_include_status_stats_and_issues():
     assert "data/reports/catch/run-1/report.json" in rendered
 
 
+def test_daily_summary_message_contains_per_site_lines():
+    cfg = SlackConfig(bot_token="t", channel_id="C")
+    notifier = SlackNotifier(cfg)
+    summary = {
+        "since": "2026-04-26T09:00:00+00:00",
+        "until": "2026-04-27T09:00:00+00:00",
+        "by_site": {
+            "catch": {
+                "runs": 9, "success": 9, "failed": 0,
+                "inserted": 73, "updated": 4, "unchanged": 21000,
+                "last_status": "success", "last_finished_at": "2026-04-27T08:00:00+00:00",
+            }
+        },
+    }
+    text, blocks = notifier._build_summary_message(summary, hours=24)
+    rendered = json.dumps({"text": text, "blocks": blocks}, ensure_ascii=False)
+    assert "catch" in rendered
+    assert "73" in rendered
+    assert "runs=9" in rendered
+
+
+def test_daily_summary_no_runs_message():
+    cfg = SlackConfig(bot_token="t", channel_id="C")
+    notifier = SlackNotifier(cfg)
+    text, blocks = notifier._build_summary_message(
+        {"since": "x", "until": "y", "by_site": {}}, hours=24
+    )
+    assert "no runs" in text
+
+
 def test_post_calls_chat_postmessage(monkeypatch):
     cfg = SlackConfig(bot_token="xoxb-test", channel_id="C123")
     notifier = SlackNotifier(cfg)

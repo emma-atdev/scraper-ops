@@ -1,0 +1,54 @@
+site: catch
+name: catch.co.kr
+enabled: true
+
+runtime:
+  preferred_environment: vm
+  min_interval_minutes: 60
+  request_delay_seconds: 1.0
+  max_pages_per_run: 100
+
+collectors:
+  jobs:
+    type: api_jobs
+    fetcher: http
+    purpose: postings
+    request:
+      method: GET
+      url: https://www.catch.co.kr/api/v1.0/recruit/information/getRecruitList
+      headers:
+        Referer: https://www.catch.co.kr/NCS/RecruitSearch
+      params:
+        Keyword: ""
+        JobCode: ""
+        Sido: ""
+        Career: ""
+        JCode: ""
+        EduLevel: ""
+        WorkPosition: ""
+        CompID: ""
+        GroupCode: ""
+        Sort: 0
+        pageSize: 30
+        onRecruitYN: "Y"
+        ExceptIDList: ""
+    pagination:
+      type: page
+      param: curpage
+      start: 1
+      max_pages: 100
+      stop_condition: empty_items
+    mapping:
+      items_path: recruitData
+      link_template: https://www.catch.co.kr/NCS/RecruitInfoDetails/{RecruitID}
+      fields:
+        external_id: RecruitID
+        title: RecruitTitle
+        company: CompName
+        deadline: ApplyEndDatetime
+    validation:
+      required_fields:
+        - external_id
+        - title
+        - company
+      min_items_per_page: 0

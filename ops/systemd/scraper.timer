@@ -1,0 +1,23 @@
+# /etc/systemd/system/scraper.timer
+#
+# scraper.service를 매시간 자동 호출.
+# 같은 이름 규칙으로 자동 매칭됨 (scraper.timer → scraper.service).
+
+[Unit]
+Description=Run scraper-ops hourly
+
+[Timer]
+# 매시간 정각
+OnCalendar=hourly
+
+# VM이 잠시 다운되어 timer 시점을 놓쳤다면 부팅 후 따라잡기 실행
+Persistent=true
+
+# 0~5분 랜덤 지연. 같은 시각에 다수 사이트가 동시 트래픽을 일으키지 않도록.
+RandomizedDelaySec=300
+
+# 정확도(timer가 발동되기까지 OS가 합쳐 처리하는 허용 오차)
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

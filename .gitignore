@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtualenv / package manager
+.venv/
+
+# Secrets and env (.env.example만 commit)
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local
+.claude/
+
+# Project runtime data (디렉토리만 보존)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/locks/*
+data/runs/*
+data/snapshots/*
+data/reports/*
+data/audit.log
+!data/locks/.gitkeep
+!data/runs/.gitkeep
+!data/snapshots/.gitkeep
+!data/reports/.gitkeep
+
+# Legacy artifacts (작업 디렉토리에서만 보존, repo에는 push 안 함)
+configs/sites/*.legacy
+tests/_legacy/

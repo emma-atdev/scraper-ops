@@ -1,0 +1,22 @@
+[project]
+name = "scraper-ops"
+version = "0.1.0"
+description = "Slack-based HITL self-healing scraper"
+requires-python = ">=3.13"
+dependencies = [
+    "scrapling[fetchers]>=0.4.7,<0.5",
+    "pyyaml>=6.0.3",
+    "pydantic>=2.9",
+    "jmespath>=1.0.1",
+    "python-dotenv>=1.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+norecursedirs = ["_legacy"]

@@ -1,0 +1,48 @@
+# /etc/systemd/system/scraper.service
+#
+# scraper-ops 1회 실행 unit. systemd timer가 호출한다.
+# 데몬 프로세스가 아니라 Type=oneshot — 한 번 실행하고 종료.
+#
+# 배포 후 다음으로 등록:
+#   sudo cp ops/systemd/scraper.service /etc/systemd/system/
+#   sudo cp ops/systemd/scraper.timer   /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now scraper.timer
+
+[Unit]
+Description=scraper-ops one-shot runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# 운영 사용자는 root가 아니라 별도 계정 권장 (예: scraper)
+# User=scraper
+# Group=scraper
+
+WorkingDirectory=/opt/scraper-ops
+
+# 시크릿은 EnvironmentFile로 주입 (root:scraper 0640 권장)
+EnvironmentFile=/etc/scraper-ops/secrets.env
+
+# 운영 환경 표시
+Environment=SCRAPER_ENVIRONMENT=vm
+Environment=SCRAPER_LOG_LEVEL=INFO
+
+# 실행 명령. uv venv의 python을 직접 호출 (uv 명령 PATH 문제 회피)
+ExecStart=/opt/scraper-ops/.venv/bin/python -m app.runner
+
+# 실패 시 systemd가 알리도록 (journal에 기록되며 monitor 도구 연동 가능)
+StandardOutput=journal
+StandardError=journal
+
+# 보안 강화 (최소 권한)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/scraper-ops/data
+
+[Install]
+WantedBy=multi-user.target

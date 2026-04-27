@@ -326,7 +326,7 @@ sudo systemctl restart scraper.timer
 | `SCRAPER_ENVIRONMENT` | `local` | `vm` |
 | 사이트 yaml `preferred_environment` | `local` | `vm` |
 | 로그 위치 | `data/launchd.out.log` (또는 stdout) | systemd journal (`journalctl`) |
-| 알림 정책 | `--notify failure` (기본) | `--notify failure` (기본) |
+| 알림 정책 | `--notify failure_or_change` (기본) | `--notify failure_or_change` (기본) |
 | 24/7 가동 | ❌ Mac 켜진 시간만 | ✅ |
 | 비용 | 0 (보유 Mac) | VM 호스팅 비용 |
 | 적합 사이트 | catch.co.kr 등 한국 IP 차단 회피 필요 | 글로벌 사이트, M6 approval server, LLM 노드 |

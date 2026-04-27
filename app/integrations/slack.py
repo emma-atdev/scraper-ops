@@ -27,6 +27,22 @@ logger = logging.getLogger("scraper.slack")
 CHAT_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 DEFAULT_TIMEOUT = 10
 
+# 진단 카테고리 한글 라벨. 운영자가 메시지에서 즉시 의미 파악할 수 있게 한다.
+DIAGNOSIS_LABELS = {
+    FailureCategory.NONE: "정상",
+    FailureCategory.NETWORK_BLOCKED: "네트워크 차단",
+    FailureCategory.EMPTY_RESULTS: "결과 없음",
+    FailureCategory.SCHEMA_CHANGE: "응답 구조 변경",
+    FailureCategory.VOLUME_DROP: "수집량 급감",
+    FailureCategory.MISSING_FIELDS: "필수 필드 누락",
+    FailureCategory.UNKNOWN: "미분류",
+}
+
+
+def _diagnosis_label(diagnosis: Diagnosis) -> str:
+    label = DIAGNOSIS_LABELS.get(diagnosis.category, diagnosis.category.value)
+    return f"{label} ({diagnosis.category.value})"
+
 
 @dataclass
 class SlackConfig:
@@ -91,19 +107,19 @@ class SlackNotifier:
         report_path: str | None,
     ) -> tuple[str, list[dict[str, Any]]]:
         emoji = self._status_emoji(status, diagnosis)
-        header = f"{emoji} `{site}` run {status} — {run_id}"
+        status_label = "수집 완료" if status == "success" else "수집 실패"
+        header = f"{emoji} {site} {status_label}"
 
+        stats_line = f"신규 {stats.inserted}건 · 변경 {stats.updated}건 · 유지 {stats.unchanged}건"
         fields = [
-            {"type": "mrkdwn", "text": f"*Status*\n{status}"},
-            {
-                "type": "mrkdwn",
-                "text": f"*Stats*\ninserted {stats.inserted} / updated {stats.updated} / unchanged {stats.unchanged}",
-            },
+            {"type": "mrkdwn", "text": f"*상태*\n{status_label} (`{status}`)"},
+            {"type": "mrkdwn", "text": f"*수집 결과*\n{stats_line}"},
         ]
         if diagnosis.category != FailureCategory.NONE:
-            fields.append(
-                {"type": "mrkdwn", "text": f"*Diagnosis*\n{diagnosis.category.value}\n{diagnosis.summary}"}
-            )
+            diag_text = f"*진단*\n{_diagnosis_label(diagnosis)}"
+            if diagnosis.summary and diagnosis.summary != "no issues":
+                diag_text += f"\n{diagnosis.summary}"
+            fields.append({"type": "mrkdwn", "text": diag_text})
 
         blocks: list[dict[str, Any]] = [
             {"type": "header", "text": {"type": "plain_text", "text": header[:150]}},
@@ -111,31 +127,28 @@ class SlackNotifier:
         ]
 
         if issues:
-            issue_lines = [f"- `{i.code}` {i.message}" for i in issues[:5]]
+            issue_lines = [f"• `{i.code}` — {i.message}" for i in issues[:5]]
             if len(issues) > 5:
-                issue_lines.append(f"- ... +{len(issues) - 5} more")
+                issue_lines.append(f"• … 외 {len(issues) - 5}건")
             blocks.append(
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": "*Issues*\n" + "\n".join(issue_lines)},
+                    "text": {"type": "mrkdwn", "text": "*이슈*\n" + "\n".join(issue_lines)},
                 }
             )
 
+        context_elements = [{"type": "mrkdwn", "text": f"run_id: `{run_id}`"}]
         if report_path:
-            blocks.append(
-                {
-                    "type": "context",
-                    "elements": [
-                        {"type": "mrkdwn", "text": f"report: `{report_path}`"},
-                    ],
-                }
-            )
+            context_elements.append({"type": "mrkdwn", "text": f"보고서: `{report_path}`"})
+        blocks.append({"type": "context", "elements": context_elements})
 
-        # fallback text (mobile notification, blocks 미지원 클라이언트)
+        # fallback text (모바일 알림, blocks 미지원 클라이언트용)
         if status == "success" and (stats.inserted > 0 or stats.updated > 0):
-            text = f"{emoji} {site} +{stats.inserted} new / ~{stats.updated} changed (k={stats.unchanged})"
+            text = f"{emoji} {site} 수집 완료 — 신규 {stats.inserted}건 · 변경 {stats.updated}건"
+        elif status == "success":
+            text = f"{emoji} {site} 수집 완료 — 변화 없음"
         else:
-            text = f"{emoji} {site} {status} — i={stats.inserted} u={stats.updated} k={stats.unchanged}"
+            text = f"{emoji} {site} 수집 실패 — {_diagnosis_label(diagnosis)}"
         return text, blocks
 
     # -------- daily summary --------
@@ -159,7 +172,7 @@ class SlackNotifier:
         by_site: dict[str, dict] = summary.get("by_site", {}) or {}
 
         if not by_site:
-            text = f":hourglass_flowing_sand: scraper-ops daily summary — last {hours}h: no runs"
+            text = f"⏳ scraper-ops 일일 요약 — 최근 {hours}시간: 실행 기록 없음"
             blocks = [
                 {"type": "header", "text": {"type": "plain_text", "text": text[:150]}},
             ]
@@ -170,16 +183,19 @@ class SlackNotifier:
         total_inserted = sum(s["inserted"] for s in by_site.values())
         total_updated = sum(s["updated"] for s in by_site.values())
 
-        emoji = ":bar_chart:" if total_failed == 0 else ":warning:"
-        header = f"{emoji} scraper-ops daily summary — last {hours}h"
+        emoji = "📊" if total_failed == 0 else "⚠️"
+        header = f"{emoji} scraper-ops 일일 요약 — 최근 {hours}시간"
 
         lines: list[str] = []
         for site_name in sorted(by_site.keys()):
             s = by_site[site_name]
-            mark = ":white_check_mark:" if s["failed"] == 0 else f":x: {s['failed']} failed"
+            mark = "✅" if s["failed"] == 0 else f"❌ 실패 {s['failed']}회"
+            last_status_label = "성공" if s["last_status"] == "success" else (
+                "실패" if s["last_status"] == "failed" else (s["last_status"] or "-")
+            )
             lines.append(
-                f"*{site_name}*  {mark}  runs={s['runs']}  +{s['inserted']} new / ~{s['updated']} changed  "
-                f"(last: {s['last_status']} @ {s['last_finished_at']})"
+                f"*{site_name}* {mark} · 실행 {s['runs']}회 · 신규 {s['inserted']}건 · 변경 {s['updated']}건\n"
+                f"  (마지막: {last_status_label} @ {s['last_finished_at']})"
             )
 
         blocks: list[dict[str, Any]] = [
@@ -194,9 +210,9 @@ class SlackNotifier:
                     {
                         "type": "mrkdwn",
                         "text": (
-                            f"window: {summary.get('since')} → {summary.get('until')} · "
-                            f"total runs={total_runs}  failed={total_failed}  "
-                            f"+{total_inserted} new / ~{total_updated} changed"
+                            f"기간: {summary.get('since')} → {summary.get('until')}\n"
+                            f"전체: 실행 {total_runs}회 · 실패 {total_failed}회 · "
+                            f"신규 {total_inserted}건 · 변경 {total_updated}건"
                         ),
                     }
                 ],
@@ -204,20 +220,20 @@ class SlackNotifier:
         ]
 
         text = (
-            f"{emoji} daily summary {hours}h — runs={total_runs} failed={total_failed} "
-            f"+{total_inserted}/~{total_updated}"
+            f"{emoji} 일일 요약 {hours}시간 — 실행 {total_runs}회 · 실패 {total_failed}회 · "
+            f"신규 {total_inserted}건 · 변경 {total_updated}건"
         )
         return text, blocks
 
     @staticmethod
     def _status_emoji(status: str, diagnosis: Diagnosis) -> str:
         if status == "success":
-            return ":white_check_mark:"
+            return "✅"
         if diagnosis.category == FailureCategory.NETWORK_BLOCKED:
-            return ":no_entry:"
+            return "🚫"
         if diagnosis.category == FailureCategory.SCHEMA_CHANGE:
-            return ":warning:"
-        return ":x:"
+            return "⚠️"
+        return "❌"
 
     # -------- HTTP 호출 --------
 

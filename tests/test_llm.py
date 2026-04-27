@@ -166,3 +166,20 @@ def test_patch_candidate_rejects_unknown_op():
         PatchCandidate.model_validate(
             {"file": "f", "changes": [{"op": "bad", "path": "p"}], "reason": "r", "risk": "low"}
         )
+
+
+def test_strict_schema_marks_all_properties_required():
+    from app.llm.client import _make_strict_schema
+    schema = PatchCandidate.model_json_schema()
+    _make_strict_schema(schema)
+
+    # 최상위
+    assert set(schema["required"]) == set(schema["properties"].keys())
+    assert schema["additionalProperties"] is False
+
+    # nested $defs (PatchOperation)
+    if "$defs" in schema:
+        op_schema = schema["$defs"].get("PatchOperation")
+        if op_schema:
+            assert set(op_schema["required"]) == set(op_schema["properties"].keys())
+            assert op_schema["additionalProperties"] is False

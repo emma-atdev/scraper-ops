@@ -151,9 +151,8 @@ class LLMClient:
         """OpenAI chat.completions.create with json_schema response_format. 응답을 dict로 반환."""
         client = self._ensure_client()
         schema = response_model.model_json_schema()
-        # OpenAI strict json_schema는 추가 제약이 있음. extra="forbid"로 model_config 둔 것을
-        # 그대로 활용하되, additionalProperties 명시.
-        schema["additionalProperties"] = False
+        # OpenAI strict mode 요구사항을 적용한다 (모든 properties required, additionalProperties false).
+        _make_strict_schema(schema)
 
         resp = client.chat.completions.create(
             model=self.config.model,
@@ -177,3 +176,33 @@ class LLMClient:
             return json.dumps(model.model_dump(), ensure_ascii=False)
         except Exception:
             return str(model)
+
+
+def _make_strict_schema(schema: dict) -> dict:
+    """OpenAI strict mode 호환 schema로 in-place 변환.
+
+    규칙:
+    - object: required에 모든 properties 키 포함, additionalProperties=false
+    - 재귀 적용 (nested object, array.items, $defs 모두)
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    if schema.get("type") == "object" or "properties" in schema:
+        props = schema.get("properties") or {}
+        if props:
+            schema["required"] = list(props.keys())
+        schema["additionalProperties"] = False
+        for v in props.values():
+            _make_strict_schema(v)
+
+    if "items" in schema:
+        _make_strict_schema(schema["items"])
+    if "$defs" in schema:
+        for v in schema["$defs"].values():
+            _make_strict_schema(v)
+    if "anyOf" in schema:
+        for v in schema["anyOf"]:
+            _make_strict_schema(v)
+
+    return schema

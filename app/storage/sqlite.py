@@ -37,6 +37,25 @@ SCHEMA = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_jobs_last_seen ON job_postings(site, last_seen_run)",
+    """
+    CREATE TABLE IF NOT EXISTS approval_request (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        site TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
+        patch_json TEXT NOT NULL,
+        dry_run_json TEXT,
+        slack_thread_ts TEXT,
+        slack_channel TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        decided_at TEXT,
+        decided_by TEXT,
+        decision_reason TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_approval_status ON approval_request(status, expires_at)",
+    "CREATE INDEX IF NOT EXISTS idx_approval_run ON approval_request(run_id)",
 ]
 
 

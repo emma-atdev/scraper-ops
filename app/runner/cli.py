@@ -18,6 +18,7 @@ import sys
 import uuid
 from pathlib import Path
 
+from app.approval import expire_due
 from app.clock import yesterday_kst_window
 from app.collectors.registry import get_collector
 from app.config import SiteConfig, load_all_sites
@@ -29,7 +30,7 @@ from app.locking import RunLock
 from app.logging_setup import setup_logging
 from app.models import UpsertStats
 from app.runtime import current_environment, parse_allowed_sites, should_run_site
-from app.storage import Repository, init_schema, open_connection
+from app.storage import ApprovalRepository, Repository, init_schema, open_connection
 from app.validators import validate_postings
 
 logger = logging.getLogger("scraper.runner")
@@ -122,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
         init_schema(conn)
         repo = Repository(conn)
         evidence = EvidenceStore(args.data_dir)
+        # 매 collect run 시작 시 만료된 approval들을 expired로 정리 (M6.4 C-1)
+        expire_due(ApprovalRepository(conn))
         slack = SlackNotifier(SlackConfig.from_env())
 
         # 보관 정책 cleanup (실패해도 수집 계속)

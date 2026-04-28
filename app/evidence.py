@@ -14,10 +14,10 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.clock import now_kst_iso
 from app.collectors.base import ValidationIssue
 from app.diagnosis.classifier import Diagnosis
 
@@ -83,7 +83,7 @@ class EvidenceStore:
             "run_id": run_id,
             "site": site,
             "status": status,
-            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "generated_at": now_kst_iso(),
             "records_count": records_count,
             "issues": [_serialize(i) for i in issues],
             "diagnosis": _serialize(diagnosis) if diagnosis else None,

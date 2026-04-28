@@ -28,3 +28,13 @@ def test_json_formatter_emits_extras():
     assert parsed["site"] == "catch"
     assert parsed["event"] == "test_event"
     assert parsed["level"] == "INFO"
+
+
+def test_json_formatter_ts_is_kst():
+    fmt = JsonLineFormatter()
+    record = logging.LogRecord(
+        "scraper.test", logging.INFO, "p", 1, "hi", (), None,
+    )
+    parsed = json.loads(fmt.format(record))
+    # KST는 +09:00 offset으로 끝난다
+    assert parsed["ts"].endswith("+09:00")

@@ -99,21 +99,23 @@ def test_daily_summary_message_contains_per_site_lines():
             }
         },
     }
-    text, blocks = notifier._build_summary_message(summary, hours=24)
+    text, blocks = notifier._build_summary_message(summary, target_date="2026-04-26")
     rendered = json.dumps({"text": text, "blocks": blocks}, ensure_ascii=False)
     assert "catch" in rendered
     assert "73" in rendered
     assert "실행 9회" in rendered
     assert "일일 요약" in rendered
+    assert "2026-04-26" in rendered
 
 
 def test_daily_summary_no_runs_message():
     cfg = SlackConfig(bot_token="t", channel_id="C")
     notifier = SlackNotifier(cfg)
     text, blocks = notifier._build_summary_message(
-        {"since": "x", "until": "y", "by_site": {}}, hours=24
+        {"since": "x", "until": "y", "by_site": {}}, target_date="2026-04-27"
     )
     assert "실행 기록 없음" in text
+    assert "2026-04-27" in text
 
 
 def test_post_calls_chat_postmessage(monkeypatch):

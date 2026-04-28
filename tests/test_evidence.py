@@ -41,3 +41,12 @@ def test_run_id_with_colon_makes_safe_dir(tmp_path):
     snap_root = tmp_path / "snapshots" / "catch"
     children = [p.name for p in snap_root.iterdir()]
     assert any("_" in name and "abc" in name for name in children)
+
+
+def test_report_generated_at_is_kst(tmp_path):
+    store = EvidenceStore(tmp_path)
+    p = store.write_report(
+        "catch", "run-1", status="ok", records_count=0, issues=[],
+    )
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["generated_at"].endswith("+09:00")

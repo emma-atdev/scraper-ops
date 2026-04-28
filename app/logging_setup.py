@@ -9,7 +9,8 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+
+from app.clock import now_kst_iso
 
 
 _SECRET_HEADER_KEYS = {"authorization", "cookie", "x-api-key", "x-auth-token"}
@@ -30,7 +31,7 @@ def mask_headers(headers: dict[str, str] | None) -> dict[str, str]:
 class JsonLineFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:  # noqa: D401
         payload = {
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "ts": now_kst_iso(),
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),

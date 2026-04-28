@@ -153,8 +153,15 @@ class SlackNotifier:
 
     # -------- daily summary --------
 
-    def notify_daily_summary(self, summary: dict[str, Any], *, hours: int = 24) -> dict[str, Any] | None:
-        """직전 N시간 운영 요약을 Slack에 게시."""
+    def notify_daily_summary(
+        self, summary: dict[str, Any], *, target_date: str
+    ) -> dict[str, Any] | None:
+        """캘린더 일자(KST) 기준 운영 요약을 Slack에 게시.
+
+        Args:
+            summary: Repository.summarize_window 반환 dict.
+            target_date: 요약 대상 날짜 (YYYY-MM-DD).
+        """
         if not self.enabled:
             logger.info(
                 "slack disabled (no token/channel), skip daily summary",
@@ -162,17 +169,17 @@ class SlackNotifier:
             )
             return None
 
-        text, blocks = self._build_summary_message(summary, hours=hours)
+        text, blocks = self._build_summary_message(summary, target_date=target_date)
         return self._post(text=text, blocks=blocks, run_id="daily_summary", site="*")
 
     @staticmethod
     def _build_summary_message(
-        summary: dict[str, Any], *, hours: int
+        summary: dict[str, Any], *, target_date: str
     ) -> tuple[str, list[dict[str, Any]]]:
         by_site: dict[str, dict] = summary.get("by_site", {}) or {}
 
         if not by_site:
-            text = f"⏳ scraper-ops 일일 요약 — 최근 {hours}시간: 실행 기록 없음"
+            text = f"⏳ scraper-ops 일일 요약 — {target_date}: 실행 기록 없음"
             blocks = [
                 {"type": "header", "text": {"type": "plain_text", "text": text[:150]}},
             ]
@@ -184,7 +191,7 @@ class SlackNotifier:
         total_updated = sum(s["updated"] for s in by_site.values())
 
         emoji = "📊" if total_failed == 0 else "⚠️"
-        header = f"{emoji} scraper-ops 일일 요약 — 최근 {hours}시간"
+        header = f"{emoji} scraper-ops 일일 요약 — {target_date}"
 
         lines: list[str] = []
         for site_name in sorted(by_site.keys()):
@@ -220,7 +227,7 @@ class SlackNotifier:
         ]
 
         text = (
-            f"{emoji} 일일 요약 {hours}시간 — 실행 {total_runs}회 · 실패 {total_failed}회 · "
+            f"{emoji} 일일 요약 {target_date} — 실행 {total_runs}회 · 실패 {total_failed}회 · "
             f"신규 {total_inserted}건 · 변경 {total_updated}건"
         )
         return text, blocks

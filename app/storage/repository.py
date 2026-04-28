@@ -13,6 +13,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _to_utc_iso(dt: datetime) -> str:
+    """timezone-aware datetime을 UTC ISO 문자열로. naive면 UTC로 간주."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
 class Repository:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
@@ -119,13 +126,15 @@ class Repository:
         ).fetchone()
         return int(row["c"]) if row else 0
 
-    def summarize_recent(self, hours: int = 24) -> dict:
-        """직전 N시간 동안의 run 통계를 site별로 집계.
+    def summarize_window(self, since: datetime, until: datetime) -> dict:
+        """[since, until) 윈도우 내 started_at 기준 run을 site별로 집계.
+
+        DB의 started_at은 UTC ISO 문자열이므로 입력 datetime이 timezone-aware라면
+        UTC로 변환해 비교한다. naive면 UTC로 간주한다.
 
         반환 형식:
         {
-            "since": iso8601,
-            "until": iso8601,
+            "since": iso8601, "until": iso8601,
             "by_site": {
                 "catch": {
                     "runs": 9, "success": 9, "failed": 0,
@@ -135,12 +144,8 @@ class Repository:
             }
         }
         """
-        from datetime import datetime, timedelta, timezone
-
-        until = datetime.now(timezone.utc)
-        since = until - timedelta(hours=hours)
-        since_iso = since.isoformat(timespec="seconds")
-        until_iso = until.isoformat(timespec="seconds")
+        since_iso = _to_utc_iso(since)
+        until_iso = _to_utc_iso(until)
 
         rows = self.conn.execute(
             """
@@ -152,10 +157,10 @@ class Repository:
                    SUM(COALESCE(updated, 0))   AS updated,
                    SUM(COALESCE(unchanged, 0)) AS unchanged
             FROM runs
-            WHERE started_at >= ?
+            WHERE started_at >= ? AND started_at < ?
             GROUP BY site
             """,
-            (since_iso,),
+            (since_iso, until_iso),
         ).fetchall()
 
         by_site: dict[str, dict] = {}
@@ -164,10 +169,10 @@ class Repository:
             last = self.conn.execute(
                 """
                 SELECT status, finished_at FROM runs
-                WHERE site=? AND started_at >= ?
+                WHERE site=? AND started_at >= ? AND started_at < ?
                 ORDER BY started_at DESC LIMIT 1
                 """,
-                (site, since_iso),
+                (site, since_iso, until_iso),
             ).fetchone()
             by_site[site] = {
                 "runs": int(r["runs"] or 0),

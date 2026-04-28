@@ -18,6 +18,7 @@ import sys
 import uuid
 from pathlib import Path
 
+from app.clock import yesterday_kst_window
 from app.collectors.registry import get_collector
 from app.config import SiteConfig, load_all_sites
 from app.diagnosis import classify_failure
@@ -288,20 +289,23 @@ def _run_site(
 
 
 def _run_daily_summary(args) -> int:
-    """직전 24시간 동안의 운영 요약을 Slack에 게시한다."""
+    """어제 캘린더 일자(KST 기준) 운영 요약을 Slack에 게시한다."""
     conn = open_connection(args.db_path)
     init_schema(conn)
     repo = Repository(conn)
-    summary = repo.summarize_recent(hours=24)
+
+    since, until, target_date = yesterday_kst_window()
+    summary = repo.summarize_window(since, until)
 
     slack = SlackNotifier(SlackConfig.from_env())
-    slack.notify_daily_summary(summary, hours=24)
+    slack.notify_daily_summary(summary, target_date=target_date.isoformat())
 
     by_site = summary.get("by_site") or {}
     logger.info(
         "daily summary posted",
         extra={
             "event": "daily_summary_posted",
+            "target_date": target_date.isoformat(),
             "sites": list(by_site.keys()),
             "total_runs": sum(s["runs"] for s in by_site.values()),
             "total_failed": sum(s["failed"] for s in by_site.values()),

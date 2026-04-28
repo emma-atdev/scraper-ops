@@ -123,3 +123,4 @@ SCRAPER_ENVIRONMENT=vm SCRAPER_ALLOWED_SITES=catch \
 - 코드 변경 전 product-plan과의 일관성 점검
 - 새 collector 타입 추가는 사람이 Python으로 작성 + PR. LLM은 YAML만 수정 (LLM 권한 경계)
 - **마일스톤·서브마일스톤 단위로 commit·push**. 한 단위(예: M6.1, M6.2 등)가 끝나면 테스트 통과 확인 후 commit 메시지 제안 → 사용자 push → 다음 단위 진입. 큰 변경을 하나의 commit에 누적하지 않는다.
+- **사용자가 "compact 할 거야"라고 말하면 즉시 진행 상태 메모리를 업데이트**한다. `~/.claude/projects/-Users-JeongminChoi-scraper-ops/memory/current_progress.md` 파일에 (1) 현재까지 완료한 마일스톤·작업 (2) 운영 결정 중 변하지 않을 사항 (3) **다음에 할 작업과 그 의도** (4) 남은 분해 단계를 기록한다. compact 후에도 이 메모리를 보고 작업을 정확히 이어가기 위함.

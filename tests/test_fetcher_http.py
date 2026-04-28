@@ -57,3 +57,34 @@ def test_with_query_appends_params():
     url = HttpFetcher._with_query("https://x.test/api", {"a": 1, "b": "y"})
     assert url.startswith("https://x.test/api?")
     assert "a=1" in url and "b=y" in url
+
+
+def test_fetch_converts_timeout_to_blocked(monkeypatch):
+    """socket read timeout이 raise되면 raise하지 않고 blocked=True로 변환해야 한다."""
+    from app.collectors.fetchers import http as http_mod
+
+    def raise_timeout(*args, **kwargs):
+        raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(http_mod.urllib.request, "urlopen", raise_timeout)
+
+    result = HttpFetcher().fetch("https://x.test/api")
+    assert result.status == 0
+    assert result.blocked is True
+    assert result.json is None
+
+
+def test_fetch_converts_urlerror_to_blocked(monkeypatch):
+    """기존 동작 회귀 방지: URLError도 blocked로 변환."""
+    import urllib.error
+
+    from app.collectors.fetchers import http as http_mod
+
+    def raise_urlerror(*args, **kwargs):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(http_mod.urllib.request, "urlopen", raise_urlerror)
+
+    result = HttpFetcher().fetch("https://x.test/api")
+    assert result.status == 0
+    assert result.blocked is True

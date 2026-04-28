@@ -64,7 +64,9 @@ class HttpFetcher:
             status = int(e.code)
             resp_headers = {k: v for k, v in (e.headers or {}).items()}
             raw = e.read() if hasattr(e, "read") else b""
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, TimeoutError):
+            # TimeoutError는 socket read timeout (Python 3.10+에서 socket.timeout alias).
+            # URLError로 wrap되지 않고 raise되므로 별도 catch.
             return FetchResult(status=0, headers={}, text="", json=None, blocked=True, url=full_url)
 
         text = raw.decode("utf-8", errors="replace")

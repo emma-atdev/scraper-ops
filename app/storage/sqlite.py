@@ -42,7 +42,7 @@ SCHEMA = [
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id TEXT NOT NULL,
         site TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'superseded')),
         patch_json TEXT NOT NULL,
         dry_run_json TEXT,
         slack_thread_ts TEXT,
@@ -76,6 +76,71 @@ def init_schema(conn: sqlite3.Connection) -> None:
     try:
         for stmt in SCHEMA:
             cur.execute(stmt)
+        cur.execute("COMMIT")
+    except Exception:
+        cur.execute("ROLLBACK")
+        raise
+
+    _migrate_approval_request_check(conn)
+
+
+def _migrate_approval_request_check(conn: sqlite3.Connection) -> None:
+    """기존 approval_request 테이블의 CHECK constraint에 'superseded'가 빠져 있으면 재생성.
+
+    SQLite는 CHECK constraint를 ALTER로 변경할 수 없으므로 표준 패턴(테이블 복사)을 쓴다.
+    M6.6b 도입 전 운영 DB에 4종 status로 데이터가 있는 경우에만 실행.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='approval_request'"
+    ).fetchone()
+    if row is None:
+        return
+    sql = row["sql"] or ""
+    if "'superseded'" in sql:
+        return  # 이미 마이그레이션됨
+
+    cur = conn.cursor()
+    cur.execute("BEGIN")
+    try:
+        cur.execute("ALTER TABLE approval_request RENAME TO approval_request_old")
+        # 새 테이블 생성 (위 SCHEMA의 approval_request 정의와 일치)
+        cur.execute("""
+            CREATE TABLE approval_request (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                site TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'superseded')),
+                patch_json TEXT NOT NULL,
+                dry_run_json TEXT,
+                slack_thread_ts TEXT,
+                slack_channel TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                decided_at TEXT,
+                decided_by TEXT,
+                decision_reason TEXT
+            )
+        """)
+        cur.execute("""
+            INSERT INTO approval_request
+              (id, run_id, site, status, patch_json, dry_run_json,
+               slack_thread_ts, slack_channel, created_at, expires_at,
+               decided_at, decided_by, decision_reason)
+            SELECT id, run_id, site, status, patch_json, dry_run_json,
+                   slack_thread_ts, slack_channel, created_at, expires_at,
+                   decided_at, decided_by, decision_reason
+            FROM approval_request_old
+        """)
+        cur.execute("DROP TABLE approval_request_old")
+        # 인덱스 재생성 (DROP TABLE이 인덱스도 같이 날림)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_approval_status "
+            "ON approval_request(status, expires_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_approval_run "
+            "ON approval_request(run_id)"
+        )
         cur.execute("COMMIT")
     except Exception:
         cur.execute("ROLLBACK")

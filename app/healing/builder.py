@@ -30,6 +30,7 @@ def build_user_prompt(
     site: str,
     yaml_text: str,
     evidence: dict[str, Any],
+    previous_attempts: list[dict[str, Any]] | None = None,
 ) -> str:
     """healing prompt 본문. system prompt는 build_system_prompt()가 별도 담당."""
     report = evidence.get("report") or {}
@@ -80,6 +81,27 @@ def build_user_prompt(
             "```json",
             _format_json(api_sample_prev),
             "```",
+        ]
+
+    if previous_attempts:
+        sections += ["", "## 이전 후보 (운영자가 받지 않음 — 다른 접근으로 다시 작성하라)"]
+        for i, prev in enumerate(previous_attempts[-3:], start=1):
+            changes = prev.get("changes") or []
+            change_lines = [
+                f"  - {c.get('op')} {c.get('path')} "
+                f"(old={c.get('old')!r}, new={c.get('new')!r})"
+                for c in changes[:5]
+            ]
+            sections += [
+                f"### 이전 후보 {i}",
+                f"- reason: {prev.get('reason', '')}",
+                f"- risk: {prev.get('risk', '')}",
+                "- changes:",
+                *(change_lines or ["  (변경 없음)"]),
+            ]
+        sections += [
+            "",
+            "위 후보들과는 **다른 접근**으로 patch를 만들어라. 같은 path/같은 변경값을 반복하지 마라.",
         ]
 
     sections += [

@@ -92,6 +92,19 @@ def reject(
     _decide(repo, id, new_status="rejected", by=by, reason=reason, audit_path=audit_path)
 
 
+def supersede(
+    repo: ApprovalRepository,
+    id: int,
+    *,
+    by: str,
+    superseded_by_id: int | None = None,
+    audit_path: str | Path | None = None,
+) -> None:
+    """regenerate 시 이전 approval을 superseded로 마감 (M6.6b F-2)."""
+    reason = f"superseded_by={superseded_by_id}" if superseded_by_id else "superseded"
+    _decide(repo, id, new_status="superseded", by=by, reason=reason, audit_path=audit_path)
+
+
 def expire_due(
     repo: ApprovalRepository,
     *,

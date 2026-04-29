@@ -28,6 +28,7 @@ def generate_patch_candidate(
     yaml_path: str | Path,
     evidence: dict[str, Any],
     client: LLMClient | None = None,
+    previous_attempts: list[dict[str, Any]] | None = None,
 ) -> PatchCandidate:
     """주어진 evidence를 LLM에 보내 PatchCandidate를 받아온다.
 
@@ -54,6 +55,7 @@ def generate_patch_candidate(
         site=site,
         yaml_text=yaml_text,
         evidence={**evidence, "yaml_path": str(yaml_path)},
+        previous_attempts=previous_attempts,
     )
 
     candidate = client.parse(

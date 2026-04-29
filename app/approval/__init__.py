@@ -7,6 +7,7 @@ from app.approval.state_machine import (
     create_approval,
     expire_due,
     reject,
+    supersede,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "create_approval",
     "expire_due",
     "reject",
+    "supersede",
 ]

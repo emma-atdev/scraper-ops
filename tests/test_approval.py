@@ -209,6 +209,56 @@ def test_expire_due_no_pending_returns_empty(repo, audit_path):
 
 # ---------- 24h 디폴트 만료 ----------
 
+# ---------- M6.6b: supersede ----------
+
+def test_supersede_transitions_to_superseded(repo, audit_path):
+    from app.approval import supersede
+
+    new_id = create_approval(
+        repo, run_id="r1", site="catch",
+        patch_json=_make_patch_json(), dry_run_json=None,
+        audit_path=audit_path,
+    )
+    supersede(repo, new_id, by="cli:tester", superseded_by_id=42, audit_path=audit_path)
+
+    row = repo.get(new_id)
+    assert row.status == "superseded"
+    assert row.decided_by == "cli:tester"
+    assert "superseded_by=42" in (row.decision_reason or "")
+
+
+def test_count_for_run(repo, audit_path):
+    create_approval(repo, run_id="r1", site="catch",
+                    patch_json="{}", dry_run_json=None, audit_path=audit_path)
+    create_approval(repo, run_id="r1", site="catch",
+                    patch_json="{}", dry_run_json=None, audit_path=audit_path)
+    create_approval(repo, run_id="r2", site="catch",
+                    patch_json="{}", dry_run_json=None, audit_path=audit_path)
+    assert repo.count_for_run("r1") == 2
+    assert repo.count_for_run("r2") == 1
+    assert repo.count_for_run("nope") == 0
+
+
+def test_migration_keeps_existing_pending_status(tmp_path):
+    """기존 4종 status DB가 init_schema 두 번 호출돼도 데이터·status 보존."""
+    from app.storage import init_schema, open_connection
+
+    db_path = tmp_path / "test.db"
+    conn = open_connection(db_path)
+    init_schema(conn)
+
+    repo_local = ApprovalRepository(conn)
+    new_id = create_approval(
+        repo_local, run_id="r1", site="catch",
+        patch_json="{}", dry_run_json=None,
+    )
+    assert repo_local.get(new_id).status == "pending"
+
+    # 두 번째 init은 no-op이어야 함 (이미 superseded 들어 있음)
+    init_schema(conn)
+    assert repo_local.get(new_id).status == "pending"
+
+
 def test_create_approval_default_expiry_is_24h(repo, audit_path):
     new_id = create_approval(
         repo, run_id="r1", site="catch",

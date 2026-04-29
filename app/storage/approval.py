@@ -103,6 +103,14 @@ class ApprovalRepository:
             (channel, thread_ts, id),
         )
 
+    def count_for_run(self, run_id: str) -> int:
+        """같은 run_id에 대해 만들어진 approval 행 수 (M6.6b regenerate 안전장치 E-1)."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM approval_request WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        return int(row["c"]) if row else 0
+
     def list_recent_rejected(self, *, site: str, since_iso: str) -> list[ApprovalRequest]:
         """site에 대해 since_iso 이후 rejected된 approval들 (M6.6 D-1 가드용)."""
         rows = self.conn.execute(

@@ -60,13 +60,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["collect", "daily_summary", "approve", "reject"],
+        choices=["collect", "daily_summary", "approve", "reject", "regenerate"],
         default="collect",
         help=(
             "collect(default): scheduled crawl. "
             "daily_summary: post yesterday-summary to Slack. "
             "approve: approve approval_request <id>. "
-            "reject: reject approval_request <id>."
+            "reject: reject approval_request <id>. "
+            "regenerate: supersede pending approval and request alt patch from LLM."
         ),
     )
     parser.add_argument("--id", type=int, help="approval_request id (for approve/reject mode)")
@@ -87,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_approve(args)
     if args.mode == "reject":
         return _run_reject(args)
+    if args.mode == "regenerate":
+        return _run_regenerate(args)
 
     environment = args.environment or current_environment()
     allowed_sites = parse_allowed_sites(os.environ.get("SCRAPER_ALLOWED_SITES"))
@@ -486,6 +489,55 @@ def _run_reject(args) -> int:
         return 2
 
     print(f"[runner] approval #{args.id} rejected")
+    return 0
+
+
+def _run_regenerate(args) -> int:
+    """이전 pending approval을 supersede하고 LLM에 다른 후보 patch를 요청 (M6.6b)."""
+    if args.id is None:
+        print("[runner] --id is required for regenerate mode")
+        return 2
+
+    from app.runner.healing_flow import (
+        PreviousApprovalNotEligible,
+        RegenerateLimitReached,
+        regenerate_approval,
+    )
+
+    by = f"cli:{os.environ.get('USER', 'unknown')}"
+    conn = open_connection(args.db_path)
+    init_schema(conn)
+    approval_repo = ApprovalRepository(conn)
+    slack = SlackNotifier(SlackConfig.from_env())
+    evidence = EvidenceStore(args.data_dir)
+
+    prev = approval_repo.get(args.id)
+    if prev is None:
+        print(f"[runner] approval #{args.id} not found")
+        return 2
+
+    yaml_path = Path(args.configs_dir) / f"{prev.site}.yaml"
+
+    def _evidence_loader():
+        return (
+            _load_api_sample(evidence, prev.site, prev.run_id),
+            _load_api_sample_prev(evidence, prev.site),
+        )
+
+    try:
+        new_id = regenerate_approval(
+            prev_approval_id=args.id, by=by,
+            yaml_path=yaml_path, evidence_loader=_evidence_loader,
+            approval_repo=approval_repo, slack=slack, db_conn=conn,
+        )
+    except RegenerateLimitReached as e:
+        print(f"[runner] regenerate failed: {e}")
+        return 2
+    except PreviousApprovalNotEligible as e:
+        print(f"[runner] regenerate failed: {e}")
+        return 2
+
+    print(f"[runner] regenerate done: prev #{args.id} → new #{new_id}")
     return 0
 
 

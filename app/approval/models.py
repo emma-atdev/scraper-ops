@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ApprovalStatus = Literal["pending", "approved", "rejected", "expired"]
+ApprovalStatus = Literal["pending", "approved", "rejected", "expired", "superseded"]
 
 
 @dataclass

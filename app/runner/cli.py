@@ -29,6 +29,7 @@ from app.integrations import SlackConfig, SlackNotifier
 from app.locking import RunLock
 from app.logging_setup import setup_logging
 from app.models import UpsertStats
+from app.runner.healing_flow import maybe_trigger_healing
 from app.runtime import current_environment, parse_allowed_sites, should_run_site
 from app.storage import ApprovalRepository, Repository, init_schema, open_connection
 from app.validators import validate_postings
@@ -142,10 +143,12 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         exit_code = 0
+        approval_repo = ApprovalRepository(conn)
         for site_name in plan:
             try:
                 site_cfg = configs[site_name]
                 site_run_id = f"{run_id}:{site_name}"
+                yaml_path = Path(args.configs_dir) / f"{site_name}.yaml"
                 stats = _run_site(
                     site_cfg,
                     site_run_id=site_run_id,
@@ -153,6 +156,9 @@ def main(argv: list[str] | None = None) -> int:
                     evidence=evidence,
                     slack=slack,
                     notify_policy=args.notify,
+                    yaml_path=yaml_path,
+                    approval_repo=approval_repo,
+                    db_conn=conn,
                 )
                 logger.info(
                     f"{site_name} done",
@@ -184,6 +190,9 @@ def _run_site(
     evidence: EvidenceStore,
     slack: SlackNotifier,
     notify_policy: str = "failure",
+    yaml_path: Path | None = None,
+    approval_repo: ApprovalRepository | None = None,
+    db_conn=None,
 ) -> UpsertStats:
     site = site_cfg.site
     repo.start_run(site, site_run_id)
@@ -288,6 +297,27 @@ def _run_site(
             diagnosis=diagnosis,
             report_path=str(report_path),
         )
+
+    # M6.5: 실패한 run에 self-healing 흐름 트리거 (조건 충족 시에만)
+    if (
+        last_status == "failed"
+        and yaml_path is not None
+        and approval_repo is not None
+        and db_conn is not None
+    ):
+        maybe_trigger_healing(
+            site=site,
+            site_run_id=site_run_id,
+            yaml_path=yaml_path,
+            diagnosis=diagnosis,
+            api_sample=_load_api_sample(evidence, site, site_run_id),
+            api_sample_prev=_load_api_sample_prev(evidence, site),
+            repo=repo,
+            approval_repo=approval_repo,
+            slack=slack,
+            db_conn=db_conn,
+        )
+
     return total
 
 
@@ -315,6 +345,34 @@ def _run_daily_summary(args) -> int:
         },
     )
     return 0
+
+
+def _load_api_sample(evidence: EvidenceStore, site: str, run_id: str) -> dict | None:
+    """방금 실패한 run의 api_sample.json을 읽는다 (없으면 None)."""
+    from app.evidence import _safe_run_id
+
+    path = evidence.base / "snapshots" / site / _safe_run_id(run_id) / "api_sample.json"
+    if not path.exists():
+        return None
+    try:
+        import json as _json
+
+        return _json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _load_api_sample_prev(evidence: EvidenceStore, site: str) -> dict | None:
+    """직전 정상 run에서 promote된 prev sample (있으면)."""
+    path = evidence.base / "snapshots" / site / "api_sample_prev.json"
+    if not path.exists():
+        return None
+    try:
+        import json as _json
+
+        return _json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def _should_notify(policy: str, status: str, stats: UpsertStats) -> bool:

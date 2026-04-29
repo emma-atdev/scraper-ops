@@ -20,12 +20,43 @@ from typing import Any
 
 from app.collectors.base import ValidationIssue
 from app.diagnosis import Diagnosis, FailureCategory
+from app.healing import DryRunResult, format_patch_diff
+from app.llm import PatchCandidate
 from app.models import UpsertStats
 
 logger = logging.getLogger("scraper.slack")
 
 CHAT_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 DEFAULT_TIMEOUT = 10
+
+# dry-run verdict별 메시지 메타. patch_invalid/patch_apply_failed/empty changes는
+# 별도 notify_healing_unavailable로 보내므로 여기에 안 둔다.
+_VERDICT_META = {
+    "improved": {
+        "emoji": "✅",
+        "label": "개선됨",
+        "recommendation": "Approve 권장",
+    },
+    "regressed": {
+        "emoji": "⚠️",
+        "label": "악화됨",
+        "recommendation": "Reject 권장 (또는 LLM 다른 후보 요청)",
+    },
+    "unchanged": {
+        "emoji": "📊",
+        "label": "변화 없음",
+        "recommendation": "효과 없는 patch — 보통 Reject",
+    },
+}
+
+
+def _truncate(text: str, limit: int) -> str:
+    if text is None:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"… (이하 {len(text) - limit}자 생략)"
+
 
 # 진단 카테고리 한글 라벨. 운영자가 메시지에서 즉시 의미 파악할 수 있게 한다.
 DIAGNOSIS_LABELS = {
@@ -229,6 +260,137 @@ class SlackNotifier:
         text = (
             f"{emoji} 일일 요약 {target_date} — 실행 {total_runs}회 · 실패 {total_failed}회 · "
             f"신규 {total_inserted}건 · 변경 {total_updated}건"
+        )
+        return text, blocks
+
+    # -------- approval request (M6.5) --------
+
+    def notify_approval_request(
+        self,
+        *,
+        approval_id: int,
+        site: str,
+        run_id: str,
+        diagnosis: Diagnosis,
+        patch: PatchCandidate,
+        dry_run: DryRunResult,
+        expires_at_kst: str,
+    ) -> dict[str, Any] | None:
+        """LLM이 만든 patch + dry-run 결과를 사람 승인용 카드로 게시.
+
+        verdict는 improved/regressed/unchanged만 받는다 (호출자가 분기).
+        patch_invalid/patch_apply_failed/empty changes는 notify_healing_unavailable로.
+        """
+        if not self.enabled:
+            logger.info(
+                "slack disabled, skip approval request",
+                extra={"event": "slack_skipped", "approval_id": approval_id, "site": site},
+            )
+            return None
+
+        text, blocks = self._build_approval_message(
+            approval_id=approval_id, site=site, run_id=run_id,
+            diagnosis=diagnosis, patch=patch, dry_run=dry_run,
+            expires_at_kst=expires_at_kst,
+        )
+        return self._post(text=text, blocks=blocks, run_id=run_id, site=site)
+
+    def notify_healing_unavailable(
+        self,
+        *,
+        site: str,
+        run_id: str,
+        reason_label: str,
+        detail: str | None = None,
+    ) -> dict[str, Any] | None:
+        """LLM이 처방 못 만들거나 패치가 yaml과 안 맞을 때 사람 점검 안내."""
+        if not self.enabled:
+            logger.info(
+                "slack disabled, skip healing unavailable",
+                extra={"event": "slack_skipped", "site": site, "run_id": run_id},
+            )
+            return None
+
+        header = f"❌ {site} — 자동 처방 불가"
+        body_lines = [f"*사유*: {reason_label}"]
+        if detail:
+            body_lines.append(f"```{_truncate(detail, 800)}```")
+        body_lines.append("\n사람이 직접 yaml을 점검해야 합니다.")
+
+        blocks: list[dict[str, Any]] = [
+            {"type": "header", "text": {"type": "plain_text", "text": header[:150]}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(body_lines)}},
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": f"run_id: `{run_id}`"}]},
+        ]
+        text = f"❌ {site} 자동 처방 불가 — {reason_label}"
+        return self._post(text=text, blocks=blocks, run_id=run_id, site=site)
+
+    @staticmethod
+    def _build_approval_message(
+        *,
+        approval_id: int,
+        site: str,
+        run_id: str,
+        diagnosis: Diagnosis,
+        patch: PatchCandidate,
+        dry_run: DryRunResult,
+        expires_at_kst: str,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        verdict_meta = _VERDICT_META.get(dry_run.verdict, _VERDICT_META["unchanged"])
+        emoji = verdict_meta["emoji"]
+        verdict_label = verdict_meta["label"]
+        recommendation = verdict_meta["recommendation"]
+
+        header = f"{emoji} {site} 처방 검토 필요 — {verdict_label} (#{approval_id})"
+
+        diag_text = (
+            f"*진단*: {_diagnosis_label(diagnosis)}\n"
+            f"*위험도*: `{patch.risk}`\n"
+            f"*근거*: {_truncate(patch.reason, 400)}"
+        )
+
+        diff_text = format_patch_diff(patch)
+        diff_block_text = f"*Patch diff*\n```{_truncate(diff_text, 1500)}```"
+
+        dry_run_lines = [
+            f"{emoji} *dry-run 결과*: {verdict_label}",
+            f"• 변경 전: 추출 {dry_run.before_count}건 · 필수 필드 누락 {dry_run.before_missing_required}건",
+            f"• 변경 후: 추출 {dry_run.after_count}건 · 필수 필드 누락 {dry_run.after_missing_required}건",
+        ]
+        if dry_run.sample_records:
+            sample_lines = []
+            for i, r in enumerate(dry_run.sample_records[:3], start=1):
+                sample_lines.append(
+                    f"  {i}) `{r.get('external_id')}` / "
+                    f"{r.get('company') or '-'} / "
+                    f"{_truncate(str(r.get('title') or '-'), 60)}"
+                )
+            dry_run_lines.append("• 샘플:")
+            dry_run_lines.extend(sample_lines)
+
+        approve_cmd = f"`python -m app.runner --mode approve --id {approval_id}`"
+        reject_cmd = f"`python -m app.runner --mode reject --id {approval_id} --reason \"...\"`"
+
+        blocks: list[dict[str, Any]] = [
+            {"type": "header", "text": {"type": "plain_text", "text": header[:150]}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": diag_text}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": diff_block_text}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(dry_run_lines)}},
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"권장: {recommendation}"},
+                    {"type": "mrkdwn", "text": f"⏰ 만료(KST): {expires_at_kst}"},
+                    {"type": "mrkdwn", "text": f"approve: {approve_cmd}"},
+                    {"type": "mrkdwn", "text": f"reject:  {reject_cmd}"},
+                    {"type": "mrkdwn", "text": f"run_id: `{run_id}`"},
+                ],
+            },
+        ]
+
+        text = (
+            f"{emoji} {site} 처방 검토 #{approval_id} — {verdict_label} "
+            f"(전 {dry_run.before_count} → 후 {dry_run.after_count})"
         )
         return text, blocks
 

@@ -126,6 +126,18 @@ class Repository:
         ).fetchone()
         return int(row["c"]) if row else 0
 
+    def has_successful_history(self, site: str) -> bool:
+        """과거에 성공해서 데이터를 적재한 run이 한 번이라도 있는지 (M6.5 신규 사이트 가드)."""
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM runs
+            WHERE site=? AND status='success' AND COALESCE(inserted, 0) + COALESCE(updated, 0) > 0
+            LIMIT 1
+            """,
+            (site,),
+        ).fetchone()
+        return row is not None
+
     def summarize_window(self, since: datetime, until: datetime) -> dict:
         """[since, until) 윈도우 내 started_at 기준 run을 site별로 집계.
 

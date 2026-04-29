@@ -1,4 +1,5 @@
 from app.healing.builder import build_user_prompt, load_yaml_text
+from app.healing.diff import format_patch_diff
 from app.healing.dry_run import (
     DryRunResult,
     FakeFetcher,
@@ -11,6 +12,7 @@ from app.healing.patcher import generate_patch_candidate
 
 __all__ = [
     "build_user_prompt",
+    "format_patch_diff",
     "generate_patch_candidate",
     "load_yaml_text",
     "DryRunResult",

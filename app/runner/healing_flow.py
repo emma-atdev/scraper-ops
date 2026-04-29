@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +44,8 @@ HEALABLE_CATEGORIES = {
     FailureCategory.SCHEMA_CHANGE,
     FailureCategory.EMPTY_RESULTS,
 }
+
+REJECT_GUARD_HOURS = 24  # M6.6 D-1: 최근 24h 내 rejected 있으면 자동 healing 스킵
 
 
 def maybe_trigger_healing(
@@ -84,6 +86,17 @@ def maybe_trigger_healing(
         logger.info(
             "healing skipped: site already has pending approval",
             extra={"event": "healing_skipped", "site": site, "reason": "pending_exists"},
+        )
+        return
+
+    # M6.6 D-1: 최근 24h 내 reject된 처방이 있으면 자동 healing 안 부른다.
+    # 운영자가 명시적으로 regenerate 명령을 치는 경우는 별도 (M6.6b).
+    guard_since = (datetime.now(timezone.utc) - timedelta(hours=REJECT_GUARD_HOURS))
+    guard_since_iso = guard_since.isoformat(timespec="seconds")
+    if approval_repo.list_recent_rejected(site=site, since_iso=guard_since_iso):
+        logger.info(
+            "healing skipped: recent rejection within guard window",
+            extra={"event": "healing_skipped", "site": site, "reason": "recent_reject"},
         )
         return
 

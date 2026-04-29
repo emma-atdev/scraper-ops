@@ -299,6 +299,40 @@ def test_patch_invalid_uses_healing_unavailable(
     assert slack.notify_healing_unavailable.call_count == 1
 
 
+def test_skip_when_recent_rejected_in_guard_window(
+    yaml_file, repo, approval_repo, slack, db_conn
+):
+    """M6.6 D-1: 최근 24h 내 rejected 있으면 자동 healing 안 부른다."""
+    _seed_successful_history(repo)
+
+    # 직접 rejected row 만들기
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    new_id = approval_repo.insert(
+        run_id="prev", site="catch", patch_json="{}", dry_run_json=None,
+        created_at=(now - timedelta(hours=1)).isoformat(timespec="seconds"),
+        expires_at=(now + timedelta(hours=23)).isoformat(timespec="seconds"),
+    )
+    approval_repo.update_status(
+        new_id, new_status="rejected",
+        decided_at=(now - timedelta(minutes=30)).isoformat(timespec="seconds"),
+        decided_by="cli:tester", decision_reason="x",
+    )
+
+    client = _make_llm_client(_make_patch_replace_items_path())
+    maybe_trigger_healing(
+        site="catch", site_run_id="r1", yaml_path=yaml_file,
+        diagnosis=_diag(FailureCategory.SCHEMA_CHANGE),
+        api_sample={"data": {"recruitData": [{"RecruitID": 1}]}},
+        api_sample_prev=None,
+        repo=repo, approval_repo=approval_repo, slack=slack,
+        db_conn=db_conn, llm_client=client,
+    )
+    assert client.parse.call_count == 0
+    assert slack.notify_approval_request.call_count == 0
+
+
 def test_pipeline_crash_does_not_propagate(
     yaml_file, repo, approval_repo, slack, db_conn
 ):

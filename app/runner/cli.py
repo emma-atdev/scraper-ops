@@ -60,10 +60,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["collect", "daily_summary"],
+        choices=["collect", "daily_summary", "approve", "reject"],
         default="collect",
-        help="collect(default): scheduled crawl. daily_summary: post 24h summary to Slack.",
+        help=(
+            "collect(default): scheduled crawl. "
+            "daily_summary: post yesterday-summary to Slack. "
+            "approve: approve approval_request <id>. "
+            "reject: reject approval_request <id>."
+        ),
     )
+    parser.add_argument("--id", type=int, help="approval_request id (for approve/reject mode)")
+    parser.add_argument("--reason", type=str, default=None, help="reject reason")
     parser.add_argument("--dry-run", action="store_true", help="Do not execute collectors. Just print plan.")
     return parser
 
@@ -76,6 +83,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mode == "daily_summary":
         return _run_daily_summary(args)
+    if args.mode == "approve":
+        return _run_approve(args)
+    if args.mode == "reject":
+        return _run_reject(args)
 
     environment = args.environment or current_environment()
     allowed_sites = parse_allowed_sites(os.environ.get("SCRAPER_ALLOWED_SITES"))
@@ -386,6 +397,96 @@ def _should_notify(policy: str, status: str, stats: UpsertStats) -> bool:
         return stats.inserted > 0 or stats.updated > 0
     # "failure" 정책
     return status != "success"
+
+
+def _run_approve(args) -> int:
+    """approve_and_apply orchestration. yaml 적용 + rerun까지 동기로."""
+    if args.id is None:
+        print("[runner] --id is required for approve mode")
+        return 2
+
+    from app.patching import approve_and_apply, ApprovalNotPending
+
+    by = f"cli:{os.environ.get('USER', 'unknown')}"
+    conn = open_connection(args.db_path)
+    init_schema(conn)
+    slack = SlackNotifier(SlackConfig.from_env())
+
+    def _rerun(site: str, conn_, slack_) -> dict:
+        """approve 후 같은 site 한 번 더 collect run을 동기로 돌린다.
+
+        성공 여부 + UpsertStats를 dict로 반환. 예외는 catch해서 success=False.
+        """
+        configs = load_all_sites(args.configs_dir)
+        if site not in configs:
+            return {"success": False, "stats": None, "error": f"site config not found: {site}"}
+        site_cfg = configs[site]
+        repo = Repository(conn_)
+        evidence = EvidenceStore(args.data_dir)
+        approval_repo = ApprovalRepository(conn_)
+        rerun_run_id = f"{uuid.uuid4()}:{site}:rerun"
+        try:
+            stats = _run_site(
+                site_cfg,
+                site_run_id=rerun_run_id,
+                repo=repo,
+                evidence=evidence,
+                slack=slack_,
+                notify_policy="never",  # rerun 자체 알림은 끄고 thread reply로 통합
+                yaml_path=Path(args.configs_dir) / f"{site}.yaml",
+                approval_repo=approval_repo,
+                db_conn=conn_,
+            )
+        except Exception as e:
+            return {"success": False, "stats": None, "error": f"{type(e).__name__}:{e}"}
+
+        # 실패 판정: stats가 다 0이면 패치가 효과 없는 것으로 간주
+        success = stats.inserted > 0 or stats.updated > 0 or stats.unchanged > 0
+        return {"success": success, "stats": stats, "error": None}
+
+    try:
+        result = approve_and_apply(
+            approval_id=args.id, by=by, conn=conn,
+            configs_dir=Path(args.configs_dir), slack=slack,
+            rerun_runner=_rerun,
+        )
+    except (LookupError, ApprovalNotPending) as e:
+        print(f"[runner] approve failed: {e}")
+        return 2
+
+    print(
+        f"[runner] approve done: applied={result['applied']} "
+        f"rerun_success={result['rerun_success']} rolled_back={result['rolled_back']}"
+    )
+    return 0 if result.get("rerun_success") else 1
+
+
+def _run_reject(args) -> int:
+    if args.id is None:
+        print("[runner] --id is required for reject mode")
+        return 2
+    if not args.reason:
+        print("[runner] --reason is required for reject mode")
+        return 2
+
+    from app.patching import reject_decision, ApprovalNotPending
+
+    by = f"cli:{os.environ.get('USER', 'unknown')}"
+    conn = open_connection(args.db_path)
+    init_schema(conn)
+    slack = SlackNotifier(SlackConfig.from_env())
+
+    try:
+        reject_decision(
+            approval_id=args.id, by=by, reason=args.reason,
+            conn=conn, slack=slack,
+        )
+    except (LookupError, ApprovalNotPending) as e:
+        print(f"[runner] reject failed: {e}")
+        return 2
+
+    print(f"[runner] approval #{args.id} rejected")
+    return 0
 
 
 if __name__ == "__main__":

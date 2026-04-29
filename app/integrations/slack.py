@@ -404,6 +404,85 @@ class SlackNotifier:
             return "⚠️"
         return "❌"
 
+    # -------- thread reply (M6.6) --------
+
+    def reply_in_thread(
+        self,
+        *,
+        channel: str,
+        thread_ts: str,
+        text: str,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        """기존 메시지(approval card)에 thread reply.
+
+        notify_apply_result 등이 호출. channel이 비어 있으면 config.channel_id로 fallback.
+        """
+        if not self.enabled:
+            return None
+        target_channel = channel or (self.config.channel_id if self.config else "")
+        return self._post(
+            text=text,
+            blocks=blocks or [],
+            run_id="thread_reply",
+            site="*",
+            channel=target_channel,
+            thread_ts=thread_ts,
+        )
+
+    def notify_apply_result(
+        self,
+        *,
+        channel: str,
+        thread_ts: str,
+        site: str,
+        approval_id: int,
+        success: bool,
+        rerun_inserted: int = 0,
+        rerun_updated: int = 0,
+        message: str | None = None,
+    ) -> dict[str, Any] | None:
+        """approve_and_apply 결과를 같은 thread에 회신."""
+        if success:
+            text = (
+                f"✅ #{approval_id} {site} patch 적용 + rerun 성공 — "
+                f"신규 {rerun_inserted}건 · 변경 {rerun_updated}건"
+            )
+        else:
+            text = f"⚠️ #{approval_id} {site} patch 적용 후 rerun 실패 — yaml 자동 롤백됨"
+            if message:
+                text += f"\n사유: {_truncate(message, 300)}"
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        ]
+        return self.reply_in_thread(
+            channel=channel, thread_ts=thread_ts, text=text, blocks=blocks,
+        )
+
+    def notify_decision_result(
+        self,
+        *,
+        channel: str,
+        thread_ts: str,
+        site: str,
+        approval_id: int,
+        decision: str,
+        by: str,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        """reject/regenerate/expire 등 단순 결정 결과 회신."""
+        emoji_map = {"rejected": "🚫", "superseded": "🔄", "expired": "⏰"}
+        emoji = emoji_map.get(decision, "ℹ️")
+        text = f"{emoji} #{approval_id} {site} {decision} (by `{by}`)"
+        if reason:
+            text += f"\n사유: {_truncate(reason, 300)}"
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        ]
+        return self.reply_in_thread(
+            channel=channel, thread_ts=thread_ts, text=text, blocks=blocks,
+        )
+
     # -------- HTTP 호출 --------
 
     def _post(
@@ -413,12 +492,19 @@ class SlackNotifier:
         blocks: list[dict[str, Any]],
         run_id: str,
         site: str,
+        channel: str | None = None,
+        thread_ts: str | None = None,
     ) -> dict[str, Any] | None:
         assert self.config is not None
-        body = json.dumps(
-            {"channel": self.config.channel_id, "text": text, "blocks": blocks},
-            ensure_ascii=False,
-        ).encode("utf-8")
+        target_channel = channel or self.config.channel_id
+        payload: dict[str, Any] = {
+            "channel": target_channel,
+            "text": text,
+            "blocks": blocks,
+        }
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             CHAT_POST_MESSAGE_URL,
             data=body,

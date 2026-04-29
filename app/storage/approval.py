@@ -103,6 +103,18 @@ class ApprovalRepository:
             (channel, thread_ts, id),
         )
 
+    def list_recent_rejected(self, *, site: str, since_iso: str) -> list[ApprovalRequest]:
+        """site에 대해 since_iso 이후 rejected된 approval들 (M6.6 D-1 가드용)."""
+        rows = self.conn.execute(
+            """
+            SELECT * FROM approval_request
+            WHERE site=? AND status='rejected' AND decided_at >= ?
+            ORDER BY decided_at DESC
+            """,
+            (site, since_iso),
+        ).fetchall()
+        return [_row_to_model(r) for r in rows]
+
 
 def _row_to_model(row: sqlite3.Row) -> ApprovalRequest:
     return ApprovalRequest(

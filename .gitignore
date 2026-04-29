@@ -39,10 +39,13 @@ data/snapshots/*
 data/reports/*
 data/audit.log
 data/*.log
+data/yaml-backups/
 !data/locks/.gitkeep
 !data/runs/.gitkeep
 !data/snapshots/.gitkeep
 !data/reports/.gitkeep
+
+docs/study-summary.md
 
 # Legacy artifacts (작업 디렉토리에서만 보존, repo에는 push 안 함)
 configs/sites/*.legacy

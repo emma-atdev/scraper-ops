@@ -60,14 +60,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["collect", "daily_summary", "approve", "reject", "regenerate"],
+        choices=["collect", "daily_summary", "approve", "reject", "regenerate", "poll_decisions"],
         default="collect",
         help=(
             "collect(default): scheduled crawl. "
             "daily_summary: post yesterday-summary to Slack. "
             "approve: approve approval_request <id>. "
             "reject: reject approval_request <id>. "
-            "regenerate: supersede pending approval and request alt patch from LLM."
+            "regenerate: supersede pending approval and request alt patch from LLM. "
+            "poll_decisions: pull decisions from VM approval_server and dispatch."
         ),
     )
     parser.add_argument("--id", type=int, help="approval_request id (for approve/reject mode)")
@@ -90,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_reject(args)
     if args.mode == "regenerate":
         return _run_regenerate(args)
+    if args.mode == "poll_decisions":
+        return _run_poll_decisions(args)
 
     environment = args.environment or current_environment()
     allowed_sites = parse_allowed_sites(os.environ.get("SCRAPER_ALLOWED_SITES"))
@@ -538,6 +541,53 @@ def _run_regenerate(args) -> int:
         return 2
 
     print(f"[runner] regenerate done: prev #{args.id} → new #{new_id}")
+    return 0
+
+
+def _run_poll_decisions(args) -> int:
+    """VM의 approval_server에서 미처리 결정을 가져와 처리 (M6.7)."""
+    from app.runner.decision_poller import poll_and_dispatch
+
+    server_url = os.environ.get("APPROVAL_SERVER_URL", "")
+    poller_token = os.environ.get("POLLER_TOKEN", "")
+    if not server_url or not poller_token:
+        print("[runner] APPROVAL_SERVER_URL and POLLER_TOKEN must be set in env")
+        return 2
+
+    conn = open_connection(args.db_path)
+    init_schema(conn)
+
+    def _site_runner(site: str, conn_, slack_) -> dict:
+        configs = load_all_sites(args.configs_dir)
+        if site not in configs:
+            return {"success": False, "stats": None, "error": f"site config not found: {site}"}
+        site_cfg = configs[site]
+        repo = Repository(conn_)
+        evidence = EvidenceStore(args.data_dir)
+        approval_repo = ApprovalRepository(conn_)
+        rerun_run_id = f"{uuid.uuid4()}:{site}:rerun"
+        try:
+            stats = _run_site(
+                site_cfg,
+                site_run_id=rerun_run_id,
+                repo=repo, evidence=evidence, slack=slack_,
+                notify_policy="never",
+                yaml_path=Path(args.configs_dir) / f"{site}.yaml",
+                approval_repo=approval_repo,
+                db_conn=conn_,
+            )
+        except Exception as e:
+            return {"success": False, "stats": None, "error": f"{type(e).__name__}:{e}"}
+        success = stats.inserted > 0 or stats.updated > 0 or stats.unchanged > 0
+        return {"success": success, "stats": stats, "error": None}
+
+    counts = poll_and_dispatch(
+        server_url=server_url, poller_token=poller_token,
+        conn=conn, configs_dir=Path(args.configs_dir),
+        data_dir=Path(args.data_dir),
+        site_runner=_site_runner,
+    )
+    print(f"[runner] poll done: {counts}")
     return 0
 
 

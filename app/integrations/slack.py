@@ -371,18 +371,44 @@ class SlackNotifier:
         approve_cmd = f"`python -m app.runner --mode approve --id {approval_id}`"
         reject_cmd = f"`python -m app.runner --mode reject --id {approval_id} --reason \"...\"`"
 
+        approval_value = str(approval_id)
         blocks: list[dict[str, Any]] = [
             {"type": "header", "text": {"type": "plain_text", "text": header[:150]}},
             {"type": "section", "text": {"type": "mrkdwn", "text": diag_text}},
             {"type": "section", "text": {"type": "mrkdwn", "text": diff_block_text}},
             {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(dry_run_lines)}},
             {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "✅ Approve"},
+                        "style": "primary",
+                        "action_id": "approve_button",
+                        "value": approval_value,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "🚫 Reject"},
+                        "style": "danger",
+                        "action_id": "reject_button",
+                        "value": approval_value,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "🔄 Regenerate"},
+                        "action_id": "regenerate_button",
+                        "value": approval_value,
+                    },
+                ],
+            },
+            {
                 "type": "context",
                 "elements": [
                     {"type": "mrkdwn", "text": f"권장: {recommendation}"},
                     {"type": "mrkdwn", "text": f"⏰ 만료(KST): {expires_at_kst}"},
-                    {"type": "mrkdwn", "text": f"approve: {approve_cmd}"},
-                    {"type": "mrkdwn", "text": f"reject:  {reject_cmd}"},
+                    {"type": "mrkdwn", "text": f"CLI 대안 — approve: {approve_cmd}"},
+                    {"type": "mrkdwn", "text": f"CLI 대안 — reject:  {reject_cmd}"},
                     {"type": "mrkdwn", "text": f"run_id: `{run_id}`"},
                 ],
             },
